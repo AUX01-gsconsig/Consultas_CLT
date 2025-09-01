@@ -1,0 +1,16 @@
+# --- Core Framework ---
+fastapi==0.115.2
+uvicorn[standard]==0.35.0
+
+# --- Banco de Dados ---
+mysql-connector-python==9.0.0
+
+# --- Data Analysis ---
+pandas==2.2.3
+numpy==2.1.1
+openpyxl==3.1.5        # leitura de Excel
+xlrd==2.0.1            # fallback para arquivos Excel antigos
+
+# --- Utilidades ---
+python-dotenv==1.0.1   # leitura de variáveis de ambiente
+colorama==0.4.6        # logs coloridos
