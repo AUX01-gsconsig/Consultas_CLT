@@ -154,7 +154,7 @@ def inserir_mysql(df: pd.DataFrame, logger: ProcessLogger = None, id_consulta=No
         existentes = set()
         if cpfs:
             placeholders_in = ",".join(["%s"] * len(cpfs))
-            cur.execute(f"SELECT cpf FROM audiencia_clt_teste WHERE cpf IN ({placeholders_in})", cpfs)
+            cur.execute(f"SELECT cpf FROM consulta_dia_clt WHERE cpf IN ({placeholders_in})", cpfs)
             existentes = {row[0] for row in cur.fetchall()}
 
         vals = [tuple(row[c] for c in colunas) for _, row in df.iterrows()]
