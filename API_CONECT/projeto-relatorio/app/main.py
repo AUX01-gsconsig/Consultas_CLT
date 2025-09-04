@@ -2,7 +2,7 @@ import os
 import re
 import pandas as pd
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
@@ -175,6 +175,19 @@ def metrics():
         "pendentes": pendentes,
         "falhas": erros
     }
+
+
+LOG_PATH = os.getenv("LOG_PATH", "app/logs/processamento.log")
+
+@app.get("/logs", tags=["Logs"], response_class=PlainTextResponse)
+def get_logs(lines: int = 100):
+    """Visualiza as últimas linhas do log de processamento"""
+    try:
+        with open(LOG_PATH, "r") as f:
+            log_lines = f.readlines()[-lines:]
+        return "".join(log_lines)
+    except Exception as e:
+        return f"Erro ao ler o log: {str(e)}"
 
 
 # ============================================================
