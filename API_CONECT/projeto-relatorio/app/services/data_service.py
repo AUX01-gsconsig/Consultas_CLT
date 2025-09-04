@@ -41,78 +41,95 @@ RENAME_MAP = {
 DECIMAL_LIMIT = 99999999.99
 DECIMAL_COLS = ['renda','valor_base_margem','valor_margem_disponivel','valor_parcela_clt','valor_liberado_clt']
 
-def tratar_df(df: pd.DataFrame, logger: ProcessLogger = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    if logger:
-        logger.data("Ajustando colunas e limpando dados...")
-    else:
-        print("[DATA] Ajustando colunas e limpando dados...")
-        
-    original = len(df)
+def erro_retorno(id_consulta, titulo, etapa, mensagem):
+    return {
+        "id": id_consulta,
+        "titulo": titulo,
+        "etapa": etapa,
+        "mensagem": mensagem
+    }
 
-    # renomear
-    df = df.rename(columns=RENAME_MAP)
-
-    # garantir todas as colunas esperadas
-    for col in EXPECTED_COLS:
-        if col not in df.columns:
-            df[col] = None
-    df = df[EXPECTED_COLS]
-
-    # CPF: apenas dígitos + zero-pad
-    if 'cpf' in df.columns:
-        df['cpf'] = (
-            df['cpf'].astype(str)
-            .str.replace(r'\D', '', regex=True)
-            .str.zfill(11)
-            .where(lambda s: s != '00000000000', np.nan)
-        )
-
-    # datas
-    for col in ['nascimento','data_admissao','data_criacao','data_modificacao']:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True).dt.date
-
-    # booleanos → 1/0
-    if 'elegivel_clt' in df.columns:
-        df['elegivel_clt'] = df['elegivel_clt'].map({True:1, False:0, 'True':1, 'False':0})
-
-    # numéricos decimais seguros
-    for col in DECIMAL_COLS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            df.loc[df[col].abs() > DECIMAL_LIMIT, col] = None
-
-    # strings vazias -> None
-    for col in df.columns:
-        if df[col].dtype == 'O':
-            df[col] = df[col].replace({'': None, 'nan': None, 'NaN': None, 'None': None})
-
-    # deduplicar por CPF (mantém a última)
-    antes = len(df)
-    df = df.drop_duplicates(subset=['cpf'], keep='last')
-    dedup = antes - len(df)
-    if dedup > 0:
+def tratar_df(df: pd.DataFrame, logger: ProcessLogger = None, id_consulta=None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    try:
         if logger:
-            logger.warning(f"Removidos {dedup} CPFs duplicados (de {antes} → {len(df)})")
+            logger.data("Ajustando colunas e limpando dados...")
         else:
-            print(f"[WARNING] Removidos {dedup} CPFs duplicados (de {antes} → {len(df)})")
+            print("[DATA] Ajustando colunas e limpando dados...")
+            
+        original = len(df)
 
-    # todos NaN/NaT → None
-    df = df.astype(object).where(pd.notna(df), None)
+        # renomear
+        df = df.rename(columns=RENAME_MAP)
 
-    if logger:
-        logger.success(f"Excel: {original} linhas | Após tratamento: {len(df)} linhas")
-    else:
-        print(f"[SUCCESS] Excel: {original} linhas | Após tratamento: {len(df)} linhas")
-        
-    return df, {"linhas_excel": original, "linhas_tratadas": len(df), "cpfs_dedup": dedup}
+        # garantir todas as colunas esperadas
+        for col in EXPECTED_COLS:
+            if col not in df.columns:
+                df[col] = None
+        df = df[EXPECTED_COLS]
 
-def inserir_mysql(df: pd.DataFrame, logger: ProcessLogger = None) -> Dict[str, Any]:
+        # CPF: apenas dígitos + zero-pad
+        if 'cpf' in df.columns:
+            df['cpf'] = (
+                df['cpf'].astype(str)
+                .str.replace(r'\D', '', regex=True)
+                .str.zfill(11)
+                .where(lambda s: s != '00000000000', np.nan)
+            )
+            # Excluir linhas onde CPF é nulo, vazio, 'nan', 'none', etc.
+            df = df[df['cpf'].notnull() & (df['cpf'] != '') & (df['cpf'].str.lower() != 'nan') & (df['cpf'].str.lower() != 'none')]
+
+        # datas
+        for col in ['nascimento','data_admissao','data_criacao','data_modificacao']:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True).dt.date
+
+        # booleanos → 1/0
+        if 'elegivel_clt' in df.columns:
+            df['elegivel_clt'] = df['elegivel_clt'].map({True:1, False:0, 'True':1, 'False':0})
+
+        # numéricos decimais seguros
+        for col in DECIMAL_COLS:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df.loc[df[col].abs() > DECIMAL_LIMIT, col] = None
+
+        # strings vazias -> None
+        for col in df.columns:
+            if df[col].dtype == 'O':
+                df[col] = df[col].replace({'': None, 'nan': None, 'NaN': None, 'None': None})
+
+        # deduplicar por CPF (mantém a última)
+        antes = len(df)
+        df = df.drop_duplicates(subset=['cpf'], keep='last')
+        dedup = antes - len(df)
+        if dedup > 0:
+            if logger:
+                logger.warning(f"Removidos {dedup} CPFs duplicados (de {antes} → {len(df)})")
+            else:
+                print(f"[WARNING] Removidos {dedup} CPFs duplicados (de {antes} → {len(df)})")
+
+        # todos NaN/NaT → None
+        df = df.astype(object).where(pd.notna(df), None)
+
+        if logger:
+            logger.success(f"Excel: {original} linhas | Após tratamento: {len(df)} linhas")
+        else:
+            print(f"[SUCCESS] Excel: {original} linhas | Após tratamento: {len(df)} linhas")
+            
+        return df, {"linhas_excel": original, "linhas_tratadas": len(df), "cpfs_dedup": dedup}
+    except FileNotFoundError as e:
+        return erro_retorno(id_consulta, "Arquivo não encontrado", "tratamento_dados", str(e)), {}
+    except pd.errors.EmptyDataError as e:
+        return erro_retorno(id_consulta, "Arquivo vazio ou corrompido", "tratamento_dados", str(e)), {}
+    except Exception as e:
+        return erro_retorno(id_consulta, "Erro no processo de tratamento", "tratamento_dados", str(e)), {}
+
+def inserir_mysql(df: pd.DataFrame, logger: ProcessLogger = None, id_consulta=None) -> Dict[str, Any]:
     if logger:
         logger.db("Preparando inserção no MySQL...")
     else:
         print("[DB] Preparando inserção no MySQL...")
-        
+    
     try:
         conn = mysql.connector.connect(
             host=DB_HOST, database=DB_NAME,
@@ -127,7 +144,7 @@ def inserir_mysql(df: pd.DataFrame, logger: ProcessLogger = None) -> Dict[str, A
         updates = ','.join([f"`{c}`=VALUES(`{c}`)" for c in colunas if c != 'cpf'])
 
         sql = f"""
-        INSERT INTO audiencia_clt_teste ({colunas_str})
+        INSERT INTO consulta_dia_clt ({colunas_str})
         VALUES ({placeholders})
         ON DUPLICATE KEY UPDATE {updates}
         """
@@ -154,10 +171,8 @@ def inserir_mysql(df: pd.DataFrame, logger: ProcessLogger = None) -> Dict[str, A
             print(f"[SUCCESS] Inseridos/Atualizados com sucesso. Enviados: {len(df)} | novos: {novos} | atualizados: {atualizados}")
             
         cur.close(); conn.close()
-        return {"enviados": len(df), "novos": novos, "atualizados": atualizados, "rowcount": rowcount, "ok": True}
+        return {"enviados": len(df), "ok": True}
+    except mysql.connector.Error as e:
+        return erro_retorno(id_consulta, "Erro na conexão ou inserção de dados", "insercao_dados", str(e))
     except Exception as e:
-        if logger:
-            logger.error(f"Erro ao inserir no MySQL: {e}")
-        else:
-            print(f"[ERROR] Erro ao inserir no MySQL: {e}")
-        return {"ok": False, "erro": str(e)}
+        return erro_retorno(id_consulta, "Erro inesperado na inserção de dados", "insercao_dados", str(e))

@@ -1,4 +1,5 @@
 import os
+import re
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -10,6 +11,7 @@ from app.utils.logger import info, error
 from app.services.db_service import db_connect, get_um_pendente, mark_finalizado
 from app.services.playwright_service import baixar_excel_por_id
 from app.services.data_service import tratar_df, inserir_mysql
+from app.api.logs import router as logs_router
 
 
 # ============================================================
@@ -46,6 +48,8 @@ app = FastAPI(
     
     license_info={"name": "Uso interno - GS Consig"}
 )
+
+app.include_router(logs_router)
 
 
 # ============================================================
@@ -177,29 +181,78 @@ def metrics():
 # FUNÇÃO INTERNA PARA EXECUTAR FLUXO
 # ============================================================
 
-async def _executar_fluxo(conn, pendente, reprocessar: bool = False):
+def get_um_pendente(conn, limite_tentativas=3):
+    cur = conn.cursor(dictionary=True)
+    cur.execute("""
+        SELECT * FROM controle_consultas
+        WHERE (status IS NULL OR status NOT IN ('FINALIZADO','Finalizado'))
+        ORDER BY id ASC
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    for row in rows:
+        obs = row.get("observacao") or ""
+        match = re.search(r"tentativas=(\d+)", obs)
+        tentativas = int(match.group(1)) if match else 0
+        if tentativas < limite_tentativas:
+            return row
+    return None
+
+
+def mark_erro(conn, row_id, etapa, detalhe, limite_tentativas=3):
+    cur = conn.cursor()
+    cur.execute("SELECT observacao FROM controle_consultas WHERE id=%s", (row_id,))
+    obs = cur.fetchone()[0] or ""
+    match = re.search(r"tentativas=(\d+)", obs)
+    tentativas = int(match.group(1)) if match else 0
+    tentativas += 1
+    nova_obs = f"tentativas={tentativas} | {etapa}: {detalhe}"
+    cur.execute("""
+        UPDATE controle_consultas
+        SET status='ERRO', observacao=%s
+        WHERE id=%s
+    """, (nova_obs, row_id))
+    conn.commit()
+    cur.close()
+    return tentativas >= limite_tentativas
+
+
+async def _executar_fluxo(conn, pendente, reprocessar: bool = False, limite_tentativas=3):
     row_id = pendente["id"]
     titulo = pendente["titulo_consulta"]
-
     try:
         # 1) baixar excel
         path = await baixar_excel_por_id(row_id, titulo)
         if not path:
-            return {"status": "erro", "etapa": "download"}
-
+            limite = mark_erro(conn, row_id, "download", "Falha ao baixar arquivo", limite_tentativas)
+            msg = "Falha ao baixar arquivo"
+            if limite:
+                msg += " | Limite de tentativas atingido."
+            return {
+                "status": "erro",
+                "etapa": "download",
+                "detalhe": msg,
+                "tentativas_limite": limite
+            }
         # 2) tratar + inserir
         info("Lendo relatório com pandas...")
         df = pd.read_excel(path)
         df, meta = tratar_df(df)
         insert_result = inserir_mysql(df)
-
         if not insert_result.get("ok"):
-            return {"status": "erro", "etapa": "inserir_mysql", "detalhe": insert_result.get("erro")}
-
+            limite = mark_erro(conn, row_id, "inserir_mysql", insert_result.get("erro"), limite_tentativas)
+            msg = insert_result.get("erro")
+            if limite:
+                msg += " | Limite de tentativas atingido."
+            return {
+                "status": "erro",
+                "etapa": "inserir_mysql",
+                "detalhe": msg,
+                "tentativas_limite": limite
+            }
         # 3) marcar finalizado se não for reprocessamento
         if not reprocessar:
             mark_finalizado(conn, row_id)
-
         return {
             "status": "ok",
             "id": row_id,
@@ -208,7 +261,15 @@ async def _executar_fluxo(conn, pendente, reprocessar: bool = False):
             "meta": meta,
             "insercao": insert_result
         }
-
     except Exception as e:
-        error(f"Erro no processamento: {e}")
-        return {"status": "erro", "etapa": "processamento", "detalhe": str(e)}
+        limite = mark_erro(conn, row_id, "processamento", str(e), limite_tentativas)
+        msg = str(e)
+        if limite:
+            msg += " | Limite de tentativas atingido."
+        error(f"Erro no processamento: {msg}")
+        return {
+            "status": "erro",
+            "etapa": "processamento",
+            "detalhe": msg,
+            "tentativas_limite": limite
+        }
