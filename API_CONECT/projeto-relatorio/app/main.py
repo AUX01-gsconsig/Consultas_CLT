@@ -1,7 +1,7 @@
 import os
 import re
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime
@@ -45,9 +45,17 @@ app = FastAPI(
     title="Relatório CLT API",
     version="1.2.0",
     description="API para automação de relatórios CLT da ConectPromotora.",
-    
     license_info={"name": "Uso interno - GS Consig"}
 )
+
+# Bloquear docs fora do localhost
+@app.middleware("http")
+async def block_docs_outside_localhost(request: Request, call_next):
+    if request.url.path in ("/docs", "/redoc", "/openapi.json"):
+        client_host = request.client.host
+        if client_host not in ("127.0.0.1", "localhost"):
+            raise HTTPException(status_code=403, detail="Docs disponíveis apenas no localhost")
+    return await call_next(request)
 
 app.include_router(logs_router)
 
