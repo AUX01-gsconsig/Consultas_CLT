@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 from . import models, schemas
 
 # Configurações principais
-SECRET_KEY = "SUA_SECRET_KEY_AQUI"  # Troque para uma chave secreta forte!
+SECRET_KEY = os.environ.get("SECRET_KEY", "SUA_SECRET_KEY_AQUI")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
