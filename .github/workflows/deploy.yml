@@ -30,8 +30,11 @@ jobs:
           IMAGE="southamerica-east1-docker.pkg.dev/n8ngsconsig/gsconsig/api_connect"
           TAG="latest"
 
+          # Entrar no diretório do Dockerfile
+          cd API_CONECT/projeto-relatorio
+
           # Build da imagem
-          docker build -f API_CONECT/projeto-relatorio/Dockerfile -t api_connect .
+          docker build -f Dockerfile -t api_connect .
 
           # Tag da imagem
           docker tag api_connect $IMAGE:$TAG
