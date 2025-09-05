@@ -15,8 +15,10 @@ jobs:
 
       # 2. Autenticar no Google Cloud usando Secret
       - name: Google Cloud Auth
+        env:
+          GCP_KEY: ${{ secrets.GCP_KEY }}
         run: |
-          echo "${{ secrets.GCP_KEY }}" | gcloud auth activate-service-account --key-file=-
+          echo "$GCP_KEY" | gcloud auth activate-service-account --key-file=-
 
       # 3. Configurar Docker para Artifact Registry
       - name: Configure Docker
@@ -49,4 +51,3 @@ jobs:
         run: |
           kubectl rollout restart deployment apiconnect -n application
           kubectl rollout status deployment apiconnect -n application
-
