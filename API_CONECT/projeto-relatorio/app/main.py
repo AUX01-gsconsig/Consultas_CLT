@@ -7,13 +7,15 @@ from typing import Optional
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
 
 from app.utils.logger import info, error
 from app.services.db_service import db_connect, get_um_pendente, mark_finalizado
 from app.services.playwright_service import baixar_excel_por_id
 from app.services.data_service import tratar_df, inserir_mysql
 from app.api.logs import router as logs_router
-from app.auth.dependencies import get_current_user  # <<< import para autenticação
+from app.auth.dependencies import get_current_user  # <<< autenticação
 
 
 # ============================================================
@@ -50,20 +52,30 @@ app = FastAPI(
     license_info={"name": "Uso interno - GS Consig"}
 )
 
-# Bloquear docs fora do localhost
-@app.middleware("http")
-async def block_docs_outside_localhost(request: Request, call_next):
-    if request.url.path in ("/docs", "/redoc", "/openapi.json"):
-        client_host = request.client.host
-        if client_host not in ("127.0.0.1", "localhost"):
-            raise HTTPException(status_code=403, detail="Docs disponíveis apenas no localhost")
-    return await call_next(request)
-
 app.include_router(logs_router)
 
 
 # ============================================================
-# ENDPOINTS (agora todos com autenticação)
+# PROTEGENDO DOCS COM LOGIN
+# ============================================================
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui(user=Depends(get_current_user)):
+    return get_swagger_ui_html(openapi_url=app.openapi_url, title=app.title + " - Docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc(user=Depends(get_current_user)):
+    return get_redoc_html(openapi_url=app.openapi_url, title=app.title + " - ReDoc")
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def custom_openapi(user=Depends(get_current_user)):
+    return get_openapi(title=app.title, version=app.version, routes=app.routes)
+
+
+# ============================================================
+# ENDPOINTS (TODOS EXIGEM LOGIN)
 # ============================================================
 
 @app.get("/", tags=["Status"], response_model=StatusResponse)
