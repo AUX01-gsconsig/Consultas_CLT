@@ -1,17 +1,19 @@
 import os
 import re
 import pandas as pd
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.utils.logger import info, error
 from app.services.db_service import db_connect, get_um_pendente, mark_finalizado
 from app.services.playwright_service import baixar_excel_por_id
 from app.services.data_service import tratar_df, inserir_mysql
 from app.api.logs import router as logs_router
+from app.auth.dependencies import get_current_user  # <<< import para autenticação
 
 
 # ============================================================
@@ -61,12 +63,12 @@ app.include_router(logs_router)
 
 
 # ============================================================
-# ENDPOINTS
+# ENDPOINTS (agora todos com autenticação)
 # ============================================================
 
 @app.get("/", tags=["Status"], response_model=StatusResponse)
 @app.get("/status", tags=["Status"], response_model=StatusResponse)
-def root():
+def root(user=Depends(get_current_user)):
     """Verifica se a API está rodando + status básico do DB"""
     try:
         conn = db_connect()
@@ -88,7 +90,7 @@ def root():
 
 
 @app.get("/pendentes", tags=["Consultas"])
-def listar_pendentes():
+def listar_pendentes(user=Depends(get_current_user)):
     """Lista registros pendentes de processamento"""
     conn = db_connect()
     cur = conn.cursor(dictionary=True)
@@ -104,7 +106,7 @@ def listar_pendentes():
 
 
 @app.post("/processar", tags=["Processamento"], response_model=ProcessarResponse)
-async def processar():
+async def processar(user=Depends(get_current_user)):
     """Processa o **próximo pendente** encontrado"""
     conn = db_connect()
     pendente = get_um_pendente(conn)
@@ -114,7 +116,7 @@ async def processar():
 
 
 @app.post("/processar/{row_id}", tags=["Processamento"], response_model=ProcessarResponse)
-async def processar_por_id(row_id: int):
+async def processar_por_id(row_id: int, user=Depends(get_current_user)):
     """Processa um **registro específico** pelo ID"""
     conn = db_connect()
     cur = conn.cursor(dictionary=True)
@@ -127,7 +129,7 @@ async def processar_por_id(row_id: int):
 
 
 @app.get("/historico", tags=["Consultas"])
-def historico():
+def historico(user=Depends(get_current_user)):
     """Lista registros já finalizados"""
     conn = db_connect()
     cur = conn.cursor(dictionary=True)
@@ -144,7 +146,7 @@ def historico():
 
 
 @app.post("/reprocessar/{row_id}", tags=["Processamento"], response_model=ProcessarResponse)
-async def reprocessar(row_id: int):
+async def reprocessar(row_id: int, user=Depends(get_current_user)):
     """Reprocessa manualmente um registro específico"""
     conn = db_connect()
     cur = conn.cursor(dictionary=True)
@@ -157,7 +159,7 @@ async def reprocessar(row_id: int):
 
 
 @app.get("/download/{row_id}", tags=["Arquivos"])
-def download(row_id: int):
+def download(row_id: int, user=Depends(get_current_user)):
     """Retorna o arquivo Excel correspondente a um registro já processado"""
     safe_name = f"{row_id}.xlsx"
     file_path = os.path.join("downloads", safe_name)
@@ -167,7 +169,7 @@ def download(row_id: int):
 
 
 @app.get("/metrics", tags=["Status"])
-def metrics():
+def metrics(user=Depends(get_current_user)):
     """Estatísticas gerais do processamento"""
     conn = db_connect()
     cur = conn.cursor()
