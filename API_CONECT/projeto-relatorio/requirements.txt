@@ -4,12 +4,17 @@ uvicorn[standard]==0.35.0
 
 # --- Banco de Dados ---
 mysql-connector-python==9.0.0
+SQLAlchemy==2.0.34
 
 # --- Data Analysis ---
 pandas==2.2.3
 numpy==2.1.1
 openpyxl==3.1.5        # leitura de Excel
 xlrd==2.0.1            # fallback para arquivos Excel antigos
+
+# --- Autenticação & Segurança ---
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 
 # --- Utilidades ---
 python-dotenv==1.0.1   # leitura de variáveis de ambiente
