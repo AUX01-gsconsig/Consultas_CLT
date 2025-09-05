@@ -44,9 +44,19 @@ def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     db_token = services.verify_refresh_token(db, refresh_token)
     if not db_token:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    # revoga o token antigo (refresh rotation)
+    services.revoke_refresh_token(db, refresh_token)
+
     user = db_token.user
     access_token = services.create_access_token({"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    new_refresh_token = services.create_refresh_token(user.id, db)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "refresh_token": new_refresh_token,
+    }
 
 @router.post("/logout")
 def logout(refresh_token: str, db: Session = Depends(get_db)):

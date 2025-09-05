@@ -5,10 +5,10 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from . import models, schemas
+from . import models
 
 # Configurações principais
-SECRET_KEY = os.environ.get("SECRET_KEY", "SUA_SECRET_KEY_AQUI")
+SECRET_KEY = os.environ["SECRET_KEY"]  # obrigatório no .env
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -25,8 +25,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(user_id: int, db: Session) -> str:
     expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
@@ -76,3 +75,9 @@ def verify_refresh_token(db: Session, token: str) -> Optional[models.RefreshToke
     except JWTError:
         pass
     return None
+
+def revoke_refresh_token(db: Session, token: str):
+    db_token = db.query(models.RefreshToken).filter_by(token=token, revoked_at=None).first()
+    if db_token:
+        db_token.revoked_at = datetime.utcnow()
+        db.commit()

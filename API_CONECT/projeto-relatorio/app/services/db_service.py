@@ -1,4 +1,5 @@
 import os
+import re
 import mysql.connector
 from typing import Optional, Dict
 from app.utils.logger import ProcessLogger
@@ -39,23 +40,32 @@ def db_connect(logger: ProcessLogger = None, id_consulta=None):
     except Exception as e:
         return erro_db_retorno(id_consulta, "Timeout ou erro inesperado na conexão", "db_connect", str(e))
 
-def get_um_pendente(conn, logger: ProcessLogger = None, id_consulta=None) -> Optional[Dict]:
+def get_um_pendente(conn, logger: ProcessLogger = None, id_consulta=None, limite_tentativas: int = 3) -> Optional[Dict]:
     try:
         if logger:
             logger.db("Buscando 1 registro pendente no controle_consultas...")
         else:
             print("[DB] Buscando 1 registro pendente no controle_consultas...")
+
         cur = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT id, titulo_consulta, banco, quantidade, data_criacao, status
+            SELECT *
             FROM controle_consultas
             WHERE status IS NULL OR status NOT IN ('Finalizado','FINALIZADO')
-            ORDER BY id DESC
-            LIMIT 1
+            ORDER BY id ASC
         """)
-        row = cur.fetchone()
+        rows = cur.fetchall()
         cur.close()
-        return row
+
+        # aplica controle de tentativas
+        for row in rows:
+            obs = row.get("observacao") or ""
+            match = re.search(r"tentativas=(\d+)", obs)
+            tentativas = int(match.group(1)) if match else 0
+            if tentativas < limite_tentativas:
+                return row
+        return None
+
     except mysql.connector.errors.ProgrammingError as e:
         return erro_db_retorno(id_consulta, "Erro de consulta SQL", "get_um_pendente", str(e))
     except mysql.connector.errors.DatabaseError as e:

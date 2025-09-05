@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
@@ -15,7 +15,7 @@ from app.services.db_service import db_connect, get_um_pendente, mark_finalizado
 from app.services.playwright_service import baixar_excel_por_id
 from app.services.data_service import tratar_df, inserir_mysql
 from app.api.logs import router as logs_router
-from app.auth.dependencies import get_current_user  # <<< autenticação
+from app.auth.dependencies import get_current_user
 
 
 # ============================================================
@@ -39,6 +39,9 @@ class ProcessarResponse(BaseModel):
     insercao: dict | None = None
     detalhe: str | None = None
     etapa: str | None = None
+    observacao: str | None = None
+    tentativas: int | None = None
+    tentativas_limite: bool | None = None
 
 
 # ============================================================
@@ -146,7 +149,7 @@ def historico(user=Depends(get_current_user)):
     conn = db_connect()
     cur = conn.cursor(dictionary=True)
     cur.execute("""
-        SELECT id, titulo_consulta, banco, quantidade, data_criacao, status
+        SELECT id, titulo_consulta, banco, quantidade, data_criacao, status, observacao
         FROM controle_consultas
         WHERE status IN ('FINALIZADO','Finalizado')
         ORDER BY data_criacao DESC
@@ -203,24 +206,6 @@ def metrics(user=Depends(get_current_user)):
 # FUNÇÃO INTERNA PARA EXECUTAR FLUXO
 # ============================================================
 
-def get_um_pendente(conn, limite_tentativas=3):
-    cur = conn.cursor(dictionary=True)
-    cur.execute("""
-        SELECT * FROM controle_consultas
-        WHERE (status IS NULL OR status NOT IN ('FINALIZADO','Finalizado'))
-        ORDER BY id ASC
-    """)
-    rows = cur.fetchall()
-    cur.close()
-    for row in rows:
-        obs = row.get("observacao") or ""
-        match = re.search(r"tentativas=(\d+)", obs)
-        tentativas = int(match.group(1)) if match else 0
-        if tentativas < limite_tentativas:
-            return row
-    return None
-
-
 def mark_erro(conn, row_id, etapa, detalhe, limite_tentativas=3):
     cur = conn.cursor()
     cur.execute("SELECT observacao FROM controle_consultas WHERE id=%s", (row_id,))
@@ -228,6 +213,7 @@ def mark_erro(conn, row_id, etapa, detalhe, limite_tentativas=3):
     match = re.search(r"tentativas=(\d+)", obs)
     tentativas = int(match.group(1)) if match else 0
     tentativas += 1
+
     nova_obs = f"tentativas={tentativas} | {etapa}: {detalhe}"
     cur.execute("""
         UPDATE controle_consultas
@@ -236,7 +222,7 @@ def mark_erro(conn, row_id, etapa, detalhe, limite_tentativas=3):
     """, (nova_obs, row_id))
     conn.commit()
     cur.close()
-    return tentativas >= limite_tentativas
+    return tentativas >= limite_tentativas, tentativas
 
 
 async def _executar_fluxo(conn, pendente, reprocessar: bool = False, limite_tentativas=3):
@@ -246,46 +232,65 @@ async def _executar_fluxo(conn, pendente, reprocessar: bool = False, limite_tent
         # 1) baixar excel
         path = await baixar_excel_por_id(row_id, titulo)
         if not path:
-            limite = mark_erro(conn, row_id, "download", "Falha ao baixar arquivo", limite_tentativas)
-            msg = "Falha ao baixar arquivo"
+            limite, tentativas = mark_erro(conn, row_id, "download", "Falha ao baixar arquivo", limite_tentativas)
+            msg = f"Falha ao baixar arquivo (tentativas={tentativas})"
             if limite:
                 msg += " | Limite de tentativas atingido."
             return {
                 "status": "erro",
                 "etapa": "download",
                 "detalhe": msg,
+                "tentativas": tentativas,
                 "tentativas_limite": limite
             }
+
         # 2) tratar + inserir
         info("Lendo relatório com pandas...")
         df = pd.read_excel(path)
         df, meta = tratar_df(df)
         insert_result = inserir_mysql(df)
         if not insert_result.get("ok"):
-            limite = mark_erro(conn, row_id, "inserir_mysql", insert_result.get("erro"), limite_tentativas)
-            msg = insert_result.get("erro")
+            limite, tentativas = mark_erro(conn, row_id, "inserir_mysql", insert_result.get("erro"), limite_tentativas)
+            msg = f"{insert_result.get('erro')} (tentativas={tentativas})"
             if limite:
                 msg += " | Limite de tentativas atingido."
             return {
                 "status": "erro",
                 "etapa": "inserir_mysql",
                 "detalhe": msg,
+                "tentativas": tentativas,
                 "tentativas_limite": limite
             }
+
         # 3) marcar finalizado se não for reprocessamento
         if not reprocessar:
-            mark_finalizado(conn, row_id)
+            cur = conn.cursor()
+            cur.execute("SELECT observacao FROM controle_consultas WHERE id=%s", (row_id,))
+            obs = cur.fetchone()[0] or ""
+            match = re.search(r"tentativas=(\d+)", obs)
+            tentativas = int(match.group(1)) if match else 0
+            cur.execute("""
+                UPDATE controle_consultas
+                SET status='FINALIZADO', observacao=%s
+                WHERE id=%s
+            """, (f"SUCESSO após {tentativas} tentativas", row_id))
+            conn.commit()
+            cur.close()
+
         return {
             "status": "ok",
             "id": row_id,
             "titulo": titulo,
             "arquivo": str(path),
             "meta": meta,
-            "insercao": insert_result
+            "insercao": insert_result,
+            "observacao": f"SUCESSO após {tentativas} tentativas",
+            "tentativas": tentativas
         }
+
     except Exception as e:
-        limite = mark_erro(conn, row_id, "processamento", str(e), limite_tentativas)
-        msg = str(e)
+        limite, tentativas = mark_erro(conn, row_id, "processamento", str(e), limite_tentativas)
+        msg = f"{str(e)} (tentativas={tentativas})"
         if limite:
             msg += " | Limite de tentativas atingido."
         error(f"Erro no processamento: {msg}")
@@ -293,5 +298,6 @@ async def _executar_fluxo(conn, pendente, reprocessar: bool = False, limite_tent
             "status": "erro",
             "etapa": "processamento",
             "detalhe": msg,
+            "tentativas": tentativas,
             "tentativas_limite": limite
         }
