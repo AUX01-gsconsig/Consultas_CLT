@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import datetime
 
 from . import models, schemas, services
 from ..database import get_db
@@ -38,11 +39,20 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "refresh_token": refresh_token,
     }
 
-@router.post("/refresh", response_model=schemas.RefreshTokenResponse)
+@router.post("/refresh", response_model=schemas.Token)
 def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     db_token = services.verify_refresh_token(db, refresh_token)
     if not db_token:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
     user = db_token.user
     access_token = services.create_access_token({"sub": user.username})
-    return {"refresh_token": access_token}
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@router.post("/logout")
+def logout(refresh_token: str, db: Session = Depends(get_db)):
+    db_token = db.query(models.RefreshToken).filter_by(token=refresh_token, revoked_at=None).first()
+    if not db_token:
+        raise HTTPException(status_code=400, detail="Refresh token inválido")
+    db_token.revoked_at = datetime.utcnow()
+    db.commit()
+    return {"msg": "Logout realizado com sucesso"}
