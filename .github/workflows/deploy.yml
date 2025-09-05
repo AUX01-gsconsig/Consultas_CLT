@@ -1,0 +1,53 @@
+name: Build and Deploy API Connect
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout do repositório
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Autenticar no Google Cloud usando Secret
+      - name: Google Cloud Auth
+        run: |
+          echo "${{ secrets.GCP_KEY }}" > gcp-key.json
+          gcloud auth activate-service-account --key-file=gcp-key.json
+
+      # 3. Configurar Docker para Artifact Registry
+      - name: Configure Docker
+        run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
+
+      # 4. Build e Push da imagem Docker
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE="southamerica-east1-docker.pkg.dev/n8ngsconsig/gsconsig/api_connect"
+          TAG="latest"
+
+          # Build da imagem
+          docker build -f API_CONECT/projeto-relatorio/Dockerfile -t api_connect .
+
+          # Tag da imagem
+          docker tag api_connect $IMAGE:$TAG
+
+          # Push da imagem
+          docker push $IMAGE:$TAG
+
+      # 5. Conectar no GKE
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials gsconsig-1 \
+            --region southamerica-east1 \
+            --project n8ngsconsig
+
+      # 6. Restart do Deployment no Kubernetes
+      - name: Restart deployment
+        run: |
+          kubectl rollout restart deployment apiconnect -n application
+          kubectl rollout status deployment apiconnect -n application
+
